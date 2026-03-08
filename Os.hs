@@ -18,7 +18,7 @@ main = do
   -- **. lazily gets the value, leaving lists and attrsets as lists and attrsets of ids
   gajimNativeBuildInputs <- pkgs *. "gajim" **. "nativeBuildInputs"
   makeWrapper <- pkgs *. "makeWrapper"
-  -- ***. does eager value conversion, getting the actual contents from nix
+  -- ***. eagerly gets the value, copying over the contents
   -- this causes segfaults with at least derivations, but basic data types work fine
   gajimPostInstall <- pkgs *. "gajim" ***. "postInstall"
 
