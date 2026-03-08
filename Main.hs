@@ -37,6 +37,6 @@ main = do
     in mkDerivation $$ args
 
   prosody <- pkgs *. "prosody" *. "override"
-             $$ ("withCommunityModules" |. ["http_altconnect", "http_health"])
+             $$ "withCommunityModules" |. ["http_altconnect", "http_health"]
   
   nixReturn [hello, prosody]
