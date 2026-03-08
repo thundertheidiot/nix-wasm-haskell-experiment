@@ -54,12 +54,12 @@ foreign import ccall "copy_attrset" nix_copy_attrset :: ValueId -> Ptr NixCopied
 foreign import ccall "copy_attrname" nix_copy_attrname :: ValueId -> Word32 -> Ptr Word32 -> Word32 -> IO ()
 
 --                                              value      ptr       str_len 
-foreign import ccall "get_attr" nix_get_attr :: ValueId -> Word32 -> Ptr Word32 -> IO ValueId
+foreign import ccall "get_attr" nix_get_attr :: ValueId -> Ptr Word32 -> Word32 -> IO ValueId
 
 foreign import ccall "call_function" nix_call_function :: ValueId -> Ptr ValueId -> Word32 -> IO ValueId
 
 --                                              fu         ptr       len 
-foreign import ccall "make_app" nix_make_app :: ValueId -> Ptr Word32 -> Word32 -> IO ValueId
+foreign import ccall "make_app" nix_make_app :: ValueId -> Ptr ValueId -> Word32 -> IO ValueId
 
 foreign import ccall "return_to_nix" return_to_nix :: ValueId -> IO ()
 
@@ -128,17 +128,7 @@ data NixValue = NixInt (Int64)
               | NixAttrset (M.Map String NixValue)
               | NixList ([NixValue])
               | NixFunction (ValueId)
-              deriving (Show)
-
-attrs :: ToNix a => [(String, a)] -> NixValue
-attrs = NixAttrset . M.fromList . map (\(k, v) -> (k, toNix v))
-
-(|.) :: String -> a -> (M.Map String a)
-key |. value = M.singleton key value
-
-(|.++) :: ToNix a => ToNix b => [(String, a)] -> [(String, b)] -> [(String, NixValue)]
-a |.++ b =
-  map (\(k, v) -> (k, toNix v)) a ++ map (\(k, v) -> (k, toNix v)) b
+              | NixUnknown (ValueId)
 
 intoNixValue :: ValueId -> IO NixValue
 intoNixValue id = do
@@ -148,10 +138,11 @@ intoNixValue id = do
     TNixBool -> NixBool . toBool <$> nix_get_bool id
     TNixString -> NixString <$> toString id 
     TNixPath -> NixPath <$> toPath id
-    TNixNull -> return NixNull
+    TNixNull -> pure NixNull
     TNixAttrset -> NixAttrset <$> toAttrset id
     TNixList -> NixList <$> toList id
-    TNixFunction -> return $ NixFunction id
+    TNixFunction -> pure $ NixFunction id
+    _ -> pure $ NixUnknown id
   where
     toBool 0 = False
     toBool _ = True
@@ -201,6 +192,7 @@ instance ToNix a => ToNix [a] where
   toNix = NixList . map toNix
 instance ToNix a => ToNix (M.Map String a) where
   toNix = NixAttrset . M.map toNix
+instance ToNix ValueId where toNix = NixUnknown
 instance ToNix NixValue where toNix = id
 
 fromNixValue :: ToNix a => a -> IO ValueId
@@ -215,6 +207,7 @@ fromNixValue value =
     NixAttrset s -> makeNixAttrset s
     NixList l -> makeNixList l
     NixFunction id -> pure id
+    NixUnknown id -> pure id
 
 makeNixString :: String -> IO ValueId
 makeNixString s = withCStringLen s $ \(ptr, len) ->
@@ -223,6 +216,11 @@ makeNixString s = withCStringLen s $ \(ptr, len) ->
 makeNixList :: [NixValue] -> IO ValueId
 makeNixList values =
   mapM fromNixValue values >>= newArray >>= (flip nix_make_list) (fromIntegral $ length values)
+
+(|++) :: ToNix a => ToNix b => [a] -> [b] -> [NixValue]
+a |++ b = map toNix a ++ map toNix b
+
+-- attrsets
 
 makeNixAttr :: (String, NixValue) -> IO NixAttr
 makeNixAttr (k, v) = do
@@ -234,8 +232,95 @@ makeNixAttrset :: (M.Map String NixValue) -> IO ValueId
 makeNixAttrset set =
   mapM makeNixAttr (M.toList set) >>= newArray >>= (flip nix_make_attrset) (fromIntegral $ length set)
 
-(|++) :: ToNix a => ToNix b => [a] -> [b] -> [NixValue]
-a |++ b = map toNix a ++ map toNix b
+getAttr :: ValueId -> String -> IO ValueId
+getAttr vid key =
+  withCStringLen key $ \(ptr, len) -> do
+    nix_get_attr vid (castPtr ptr) (fromIntegral len)
+
+class NixGetAttrs f where
+  (*.) :: f -> String -> IO ValueId 
+  (**.) :: f -> String -> IO NixValue
+
+infixl 8 *.
+infixl 8 **.
+
+instance NixGetAttrs ValueId where
+  vid *. key =
+    getAttr vid key
+
+  vid **. key =
+    getAttr vid key >>= intoNixValue
+
+instance NixGetAttrs (IO ValueId) where
+  vid *. key = do
+    vid <- vid
+    getAttr vid key
+
+  vid **. key = do
+    vid <- vid
+    getAttr vid key >>= intoNixValue
+
+attrs :: ToNix a => [(String, a)] -> NixValue
+attrs = NixAttrset . M.fromList . map (\(k, v) -> (k, toNix v))
+
+(|.) :: String -> a -> (M.Map String a)
+key |. value = M.singleton key value
+
+(|.++) :: ToNix a => ToNix b => [(String, a)] -> [(String, b)] -> [(String, NixValue)]
+a |.++ b =
+  map (\(k, v) -> (k, toNix v)) a ++ map (\(k, v) -> (k, toNix v)) b
+
+-- functions
+
+call :: ToNix a => ValueId -> a -> IO ValueId
+call fun arg = do
+  array <- mapM id [fromNixValue arg] >>= newArray
+  nix_call_function fun array 1
+
+class NixCallable f where
+  ($$) :: ToNix a => f -> a -> IO ValueId
+  ($$$) :: ToNix a => f -> a -> IO NixValue
+  
+infixl 8 $$
+
+instance NixCallable ValueId where
+  funId $$ arg =
+    call funId arg
+
+  funId $$$ arg =
+    call funId arg >>= intoNixValue
+
+instance NixCallable (IO ValueId) where
+  funId $$ arg = do
+    funId <- funId
+    call funId arg
+
+  funId $$$ arg = do
+    funId <- funId
+    call funId arg >>= intoNixValue
+
+instance NixCallable NixValue where
+  val $$ arg = do
+    funId <- fromNixValue val
+    call funId arg
+
+  val $$$ arg = do
+    funId <- fromNixValue val
+    call funId arg >>= intoNixValue
+
+instance NixCallable (IO NixValue) where
+  ioVal $$ arg = do
+    val <- ioVal
+    funId <- fromNixValue val
+    call funId arg
+
+  ioVal $$$ arg = do
+    val <- ioVal
+    funId <- fromNixValue val
+    call funId arg >>= intoNixValue
+  
+nixReturn :: ToNix a => a -> IO ()
+nixReturn v = fromNixValue v >>= return_to_nix
 
 getInputValue :: IO ValueId
 getInputValue = do
