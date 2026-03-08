@@ -30,7 +30,7 @@
             mkdir ./build
             wasm32-wasi-ghc Os.hs -o nixos.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
 
-            nix --extra-experimental-features wasm-builtin build .#nixosConfigurations.test.config.system.build.toplevel --show-trace
+            nix --extra-experimental-features wasm-builtin build .#nixosConfigurations.test.config.system.build.toplevel --show-trace --print-out-paths
           '')
         ];
       };

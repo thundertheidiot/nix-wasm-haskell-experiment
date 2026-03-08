@@ -1,17 +1,14 @@
 import NixHost
-import Foreign.C.String
-import Foreign.Ptr
-import Control.Monad
 
 main = do
   inputs <- getInputValue
 
   pkgs <- inputs *. "specialArgs" *. "pkgs"
 
-  systemPackages <- mapM (pkgs *.) ["vim", "kodi"]
+  systemPackages <- mapM (pkgs *.) ["vim", "hello"]
 
   config <- pure
-    $ "networking" |. "hostName" |. "built_by_nixkell"
+    $ "networking" |. "hostName" |. "built_by_haskell"
     // "time" |. "timeZone" |. "Europe/Helsinki"
     // "users" |. "users" |. "user" |. attrs ([ ("extraGroups", ["wheel", "networkmanager"])
                                               ] |.++
