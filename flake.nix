@@ -24,6 +24,8 @@
           (pkgs.writeShellScriptBin "build" ''
             mkdir ./build
             wasm32-wasi-ghc Main.hs -o nix.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
+
+            wasm32-wasi-ghc Os.hs -o nixos.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
           '')
 
           (pkgs.writeShellScriptBin "buildos" ''

@@ -1,4 +1,4 @@
-import NixHost
+import NixWasm.Lib
 
 import qualified Data.Map.Strict as M
 
