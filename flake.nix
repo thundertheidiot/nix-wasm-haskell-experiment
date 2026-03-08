@@ -25,8 +25,28 @@
             mkdir ./build
             wasm32-wasi-ghc Main.hs -o nix.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
           '')
+
+          (pkgs.writeShellScriptBin "buildos" ''
+            mkdir ./build
+            wasm32-wasi-ghc Os.hs -o nixos.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
+
+            nix --extra-experimental-features wasm-builtin build .#nixosConfigurations.test.config.system.build.toplevel --show-trace
+          '')
         ];
       };
+    });
+
+    nixosConfigurations.test = nixpkgs.lib.nixosSystem (let
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+    in {
+      specialArgs = {inherit pkgs;};
+      modules = [
+        nixpkgs.nixosModules.readOnlyPkgs
+        ({...}: {
+          config.nixpkgs.pkgs = pkgs;
+        })
+        (builtins.wasm {path = ./nixos.wasm;})
+      ];
     });
   };
 }

@@ -17,7 +17,7 @@ import qualified Data.Map.Strict as M
 type ValueId = Word32
 
 foreign import ccall "panic" nix_panic :: Ptr () -> Word32 -> IO ()
-foreign import ccall "warn" nix_warn :: Ptr () -> Word32 -> IO ()
+foreign import ccall "warn" nix_warn :: Ptr Word32 -> Word32 -> IO ()
 
 foreign import ccall "get_type" nix_get_type :: ValueId -> IO Word32
 
@@ -129,6 +129,37 @@ data NixValue = NixInt (Int64)
               | NixList ([NixValue])
               | NixFunction (ValueId)
               | NixUnknown (ValueId)
+              deriving Show
+
+nixList :: ValueId -> IO [ValueId]
+nixList vid = do
+  len <- nix_copy_list vid nullPtr 0
+  allocaArray (fromIntegral len) $ \ptr -> do
+    _ <- nix_copy_list vid ptr len
+    list <- peekArray (fromIntegral len) ptr
+    pure list
+
+lazyNixValue :: ValueId -> IO NixValue
+lazyNixValue vid = do
+  getType vid >>= \case
+    TNixList -> NixList <$> map NixUnknown <$> nixList vid
+    _ -> pure $ NixUnknown vid
+
+attrName :: ValueId -> (Int, Word32) -> IO String
+attrName id (i, len) = do
+  allocaBytes (fromIntegral len)$ \ptr -> do
+    _ <- nix_copy_attrname id (fromIntegral i) ptr (fromIntegral len)
+    peekCStringLen (castPtr ptr, fromIntegral len)
+
+lazyAttrSet :: ValueId -> IO [(String, NixValue)]
+lazyAttrSet vid = do
+      len <- nix_copy_attrset vid nullPtr 0
+      allocaArray (fromIntegral len) $ \ptr -> do
+        _ <- nix_copy_attrset vid ptr len
+        list <- peekArray (fromIntegral len) ptr
+        names <- mapM (attrName vid) $ zip [0..] (map attrNameLen list)
+        
+        return $ zip names $ map (NixUnknown . attrValueId) list
 
 intoNixValue :: ValueId -> IO NixValue
 intoNixValue id = do
@@ -154,21 +185,13 @@ intoNixValue id = do
         _ <- copy id ptr len
         peekCStringLen (castPtr ptr, fromIntegral len)
 
+    toList :: ValueId -> IO [NixValue]
+    toList vid = do
+      list <- nixList vid
+      mapM intoNixValue list
+
     toString = copyStringLike nix_copy_string
     toPath = copyStringLike nix_copy_path
-
-    toList id = do
-      len <- nix_copy_list id nullPtr 0
-      allocaArray (fromIntegral len) $ \ptr -> do
-        _ <- nix_copy_list id ptr len
-        list <- peekArray (fromIntegral len) ptr
-        mapM intoNixValue list
-
-    toKVP :: ValueId -> (Int, Word32) -> IO String
-    toKVP id (i, len) = do
-      allocaBytes (fromIntegral len)$ \ptr -> do
-        _ <- nix_copy_attrname id (fromIntegral i) ptr (fromIntegral len)
-        peekCStringLen (castPtr ptr, fromIntegral len)
 
     toAttrset :: ValueId -> IO (M.Map String NixValue)
     toAttrset id = do
@@ -176,7 +199,7 @@ intoNixValue id = do
       allocaArray (fromIntegral len) $ \ptr -> do
         _ <- nix_copy_attrset id ptr len
         list <- peekArray (fromIntegral len) ptr
-        names <- mapM (toKVP id) $ zip [0..] (map attrNameLen list)
+        names <- mapM (attrName id) $ zip [0..] (map attrNameLen list)
         values <- mapM (intoNixValue . attrValueId) list
         
         return $ M.fromList $ zip names values
@@ -217,6 +240,10 @@ makeNixList :: [NixValue] -> IO ValueId
 makeNixList values =
   mapM fromNixValue values >>= newArray >>= (flip nix_make_list) (fromIntegral $ length values)
 
+getList :: NixValue -> [NixValue]
+getList (NixList l) = l
+getList _ = error "Expected list"
+
 (|++) :: ToNix a => ToNix b => [a] -> [b] -> [NixValue]
 a |++ b = map toNix a ++ map toNix b
 
@@ -237,18 +264,23 @@ getAttr vid key =
   withCStringLen key $ \(ptr, len) -> do
     nix_get_attr vid (castPtr ptr) (fromIntegral len)
 
-class NixGetAttrs f where
-  (*.) :: f -> String -> IO ValueId 
-  (**.) :: f -> String -> IO NixValue
+class NixGetAttrs a where
+  (*.) :: a -> String -> IO ValueId 
+  (**.) :: a -> String -> IO NixValue -- lazy
+  (***.) :: a -> String -> IO NixValue -- eager
 
 infixl 8 *.
 infixl 8 **.
+infixl 8 ***.
 
 instance NixGetAttrs ValueId where
   vid *. key =
     getAttr vid key
 
   vid **. key =
+    getAttr vid key >>= lazyNixValue
+
+  vid ***. key =
     getAttr vid key >>= intoNixValue
 
 instance NixGetAttrs (IO ValueId) where
@@ -258,17 +290,54 @@ instance NixGetAttrs (IO ValueId) where
 
   vid **. key = do
     vid <- vid
-    getAttr vid key >>= intoNixValue
+    getAttr vid key >>= lazyNixValue
 
+  vid ***. key = do
+    vid <- vid
+    getAttr vid key >>= intoNixValue
+    
 attrs :: ToNix a => [(String, a)] -> NixValue
 attrs = NixAttrset . M.fromList . map (\(k, v) -> (k, toNix v))
 
-(|.) :: String -> a -> (M.Map String a)
-key |. value = M.singleton key value
+(|.) :: ToNix a => String -> a -> (M.Map String NixValue)
+key |. value = M.singleton key $ toNix value
+
+infixr 9 |.
 
 (|.++) :: ToNix a => ToNix b => [(String, a)] -> [(String, b)] -> [(String, NixValue)]
 a |.++ b =
   map (\(k, v) -> (k, toNix v)) a ++ map (\(k, v) -> (k, toNix v)) b
+
+class MergeAttrs a b where
+  (//) :: a -> b -> NixValue
+
+infixl 8 //
+
+instance MergeAttrs (M.Map String NixValue) (M.Map String NixValue) where
+  left // right = NixAttrset $ M.union right left
+
+instance MergeAttrs NixValue (M.Map String NixValue) where
+  (NixAttrset left) // right = NixAttrset $ M.union right left
+  _ // _ = error "Can only merge attrsets"
+
+instance ToNix a => MergeAttrs NixValue [(String, a)] where
+  (NixAttrset left) // right = NixAttrset $ M.union (M.fromList $ map (\(k, v) -> (k, toNix v)) right) left
+  _ // _ = error "Can only merge attrsets"
+
+instance ToNix a => MergeAttrs (M.Map String NixValue) [(String, a)] where
+  left // right = NixAttrset $ M.union (M.fromList $ map (\(k, v) -> (k, toNix v)) right) left
+
+instance ToNix a => MergeAttrs [(String, a)] (M.Map String NixValue) where
+  left // right = NixAttrset $ M.union right (M.fromList $ map (\(k, v) -> (k, toNix v)) left)
+
+instance (ToNix a, ToNix b) => MergeAttrs [(String, a)] [(String, b)] where
+  left // right = NixAttrset $ M.fromList $ map nix left ++ map nix right
+    where
+      nix (k, v) = (k, toNix v)
+
+instance MergeAttrs NixValue NixValue where
+  (NixAttrset b) // (NixAttrset a) = NixAttrset $ M.union a b
+  _ // _ = error "Expected two attrsets"
 
 -- functions
 
@@ -282,6 +351,7 @@ class NixCallable f where
   ($$$) :: ToNix a => f -> a -> IO NixValue
   
 infixl 8 $$
+infixl 8 $$$
 
 instance NixCallable ValueId where
   funId $$ arg =
@@ -329,3 +399,7 @@ getInputValue = do
     (v:_) -> return (read v)
     _     -> error "No"
 
+nixWarn :: String -> IO ()
+nixWarn s =
+  withCStringLen s $ \(ptr, len) ->
+    nix_warn (castPtr ptr) (fromIntegral len)

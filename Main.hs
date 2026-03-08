@@ -36,7 +36,16 @@ main = do
         ]
     in mkDerivation $$ args
 
-  prosody <- pkgs *. "prosody" *. "override"
-             $$ "withCommunityModules" |. ["http_altconnect", "http_health"]
+  prosody <- pkgs *. "prosody"
+
+  prosodyBuildInputs <- prosody **. "buildInputs"
+  openssl <- pkgs *. "openssl"
+  
+  prosody <- prosody *. "overrideAttrs"
+    $$ "buildInputs" |. (getList prosodyBuildInputs |++ [openssl])
+
+  prosody <- prosody *. "override"
+    $$ "withCommunityModules" |. ["http_altconnect", "http_health"] 
+             
   
   nixReturn [hello, prosody]
