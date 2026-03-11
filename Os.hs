@@ -1,4 +1,5 @@
 import NixWasm.Lib 
+import Control.Monad (join)
 
 main = do
   inputs <- getInputValue
@@ -6,29 +7,18 @@ main = do
   -- *. gets only the id
   pkgs <- inputs *. "specialArgs" *. "pkgs"
 
+  mod <- pure $
+         attrs [ "nixpkgs" |. "hostPlatform" |. "x86_64-linux"
+               ]
+
+  evalModules <- inputs *. "evalModules"
+
+  modules <- evalModules $$ [mod]
+  config <- modules **. "config"
+
+  _ <- nixWarn . show =<< modules **. "config"
+
   systemPackages <- mapM (pkgs *.) ["vim", "hello"]
-
-  -- lets override some stuff
-  catppuccinGtk <- pkgs *. "catppuccin-gtk" *. "override"
-    $$ attrs [ "accents" |. ["mauve"]
-             , "size" |. "compact"
-             , "variant" |. "mocha"
-             ]
-
-  -- **. lazily gets the value, leaving lists and attrsets as lists and attrsets of ids
-  gajimNativeBuildInputs <- pkgs *. "gajim" **. "nativeBuildInputs"
-  makeWrapper <- pkgs *. "makeWrapper"
-  -- ***. eagerly gets the value, copying over the contents
-  -- this causes segfaults with at least derivations, but basic data types work fine
-  gajimPostInstall <- pkgs *. "gajim" ***. "postInstall"
-
-  gajim <- pkgs *. "gajim" *. "overrideAttrs"
-    $$ attrs [ "nativeBuildInputs" |. mergeNix -- mergeNix operates on lists
-               gajimNativeBuildInputs (toNix [makeWrapper])
-             , "postInstall" |. joinNixString -- joins any combination of ToNix
-               gajimPostInstall "\n\
-                                \wrapProgram $out/bin/gajim --set XDG_CURRENT_DESKTOP GNOME"
-             ]
 
   nixReturn $ "config" |. mAttrs 
     [ "networking" |. "hostName" |. "built_by_haskell"
@@ -51,8 +41,6 @@ main = do
      
      -- lists are also merged
      , "environment" |. "systemPackages" |. systemPackages
-     , "environment" |. "systemPackages" |. [gajim]
-     , "environment" |. "systemPackages" |. [catppuccinGtk]
 
      , "services" |. "openssh" |. enable
      ]

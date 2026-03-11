@@ -8,7 +8,7 @@ import Foreign.Storable
 
 type ValueId = Word32
 
-foreign import ccall "panic" nix_panic :: Ptr () -> Word32 -> IO ()
+foreign import ccall "panic" nix_panic :: Ptr Word32 -> Word32 -> IO ()
 foreign import ccall "warn" nix_warn :: Ptr Word32 -> Word32 -> IO ()
 
 foreign import ccall "get_type" nix_get_type :: ValueId -> IO Word32

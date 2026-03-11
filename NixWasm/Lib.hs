@@ -40,7 +40,7 @@ data NixValue = NixInt (Int64)
               | NixFloat (Double)
               | NixBool (Bool)
               | NixString (String)
-              | NixPath (String)
+              | NixPath (ValueId, String)
               | NixNull
               | NixAttrset ([NixAttr])
               | NixList ([NixValue])
@@ -113,7 +113,9 @@ intoNixValue id = do
       mapM intoNixValue list
 
     toString = copyStringLike nix_copy_string
-    toPath = copyStringLike nix_copy_path
+
+    toPath :: ValueId -> IO (ValueId, String)
+    toPath vid = (vid,) <$> copyStringLike nix_copy_path vid
 
     toAttrset :: ValueId -> IO [NixAttr]
     toAttrset id = do
@@ -149,7 +151,7 @@ fromNixValue value =
     NixFloat float -> nix_make_float $ realToFrac float
     NixBool bool -> nix_make_bool $ if bool then 1 else 0
     NixString string -> makeNixString string
-    NixPath _ -> undefined
+    NixPath p -> pure $ fst p
     NixNull -> nix_make_null
     NixAttrset s -> makeNixAttrset s
     NixList l -> makeNixList l
@@ -163,6 +165,10 @@ makeNixString s = withCStringLen s $ \(ptr, len) ->
 makeNixList :: [NixValue] -> IO ValueId
 makeNixList values =
   mapM fromNixValue values >>= newArray >>= (flip nix_make_list) (fromIntegral $ length values)
+
+getString :: NixValue -> String
+getString (NixString s) = s
+getString _ = error "Expected string"
 
 getList :: NixValue -> [NixValue]
 getList (NixList l) = l
@@ -324,6 +330,14 @@ instance ToNix a => MergeAttrs [(String, a)] NixValue where
 
   left /// (NixAttrset right) = left /// right 
   _ /// _ = error "Can only merge attrsets"
+
+-- paths
+
+makeNixPath :: NixValue -> String -> IO NixValue
+makeNixPath p s = withCStringLen s $ \(ptr, len) -> do
+  vid <- fromNixValue p
+  nix_make_path vid (castPtr ptr) (fromIntegral len) >>= intoNixValue
+
 
 -- functions
 

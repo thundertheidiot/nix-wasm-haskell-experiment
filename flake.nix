@@ -48,7 +48,15 @@
         ({...}: {
           config.nixpkgs.pkgs = pkgs;
         })
-        (builtins.wasm {path = ./out/config.wasm;})
+        (set:
+          builtins.wasm {path = ./out/config.wasm;} (set
+            // {
+              evalModules = extra:
+                nixpkgs.lib.evalModules {
+                  class = "nixos";
+                  modules = import "${set.specialArgs.modulesPath}/../../nixos/modules/module-list.nix" ++ extra;
+                };
+            }))
       ];
     });
   };
