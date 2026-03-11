@@ -48,6 +48,10 @@ data NixValue = NixInt (Int64)
               | NixRawId (ValueId)
               deriving Show
 
+nixBool :: NixValue -> Bool
+nixBool (NixBool b) = b
+nixBool _ = error "Expected a boolean"
+
 nixList :: ValueId -> IO [ValueId]
 nixList vid = do
   len <- nix_copy_list vid nullPtr 0
@@ -216,6 +220,16 @@ instance NixGetAttrs (IO ValueId) where
     vid <- vid
     getAttr vid key >>= intoNixValue
 
+instance NixGetAttrs NixValue where
+  val *. key =
+    fromNixValue val >>= flip getAttr key
+
+  val **. key =
+    fromNixValue val >>= flip getAttr key >>= lazyNixValue
+
+  val ***. key =
+    fromNixValue val >>= flip getAttr key >>= intoNixValue
+
 attr :: ToNix a => String -> a -> NixAttr
 attr k v = (k, toNix v)
 
@@ -227,6 +241,9 @@ attrs = NixAttrset . map attr'
 
 mAttrs :: ToNix a => [(String, a)] -> NixValue
 mAttrs = foldl mergeNix (NixAttrset []) . map (\a -> NixAttrset [a]) . map attr'
+
+emptyAttrs :: NixValue
+emptyAttrs = NixAttrset []
 
 (|.) :: ToNix a => String -> a -> NixAttr
 key |. value = attr key value 
@@ -357,7 +374,7 @@ instance NixCallable (IO NixValue) where
     val <- ioVal
     funId <- fromNixValue val
     call funId arg >>= intoNixValue
-  
+
 nixReturn :: ToNix a => a -> IO ()
 nixReturn v = fromNixValue v >>= return_to_nix
 

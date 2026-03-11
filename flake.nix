@@ -23,16 +23,17 @@
           inputs.ghc-wasm-meta.packages."${pkgs.system}".default
           (pkgs.writeShellScriptBin "build" ''
             mkdir ./build
-            wasm32-wasi-ghc Main.hs -o nix.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
 
-            wasm32-wasi-ghc Os.hs -o nixos.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
+            wasm32-wasi-ghc Os.hs -o ./build/nixos.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
           '')
 
           (pkgs.writeShellScriptBin "buildos" ''
-            mkdir ./build
-            wasm32-wasi-ghc Os.hs -o nixos.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
+            set -euox pipefail
 
-            nix --extra-experimental-features wasm-builtin build .#nixosConfigurations.test.config.system.build.toplevel --show-trace --print-out-paths
+            mkdir --parents ./build ./out
+            wasm32-wasi-ghc Os.hs -o ./out/config.wasm -optl-Wl,--export=memory -optl-Wl,--allow-undefined -odir ./build -hidir ./build
+
+            nix --extra-experimental-features wasm-builtin build .#nixosConfigurations.test.config.system.build.toplevel --show-trace --print-out-paths --no-link
           '')
         ];
       };
@@ -47,7 +48,7 @@
         ({...}: {
           config.nixpkgs.pkgs = pkgs;
         })
-        (builtins.wasm {path = ./nixos.wasm;})
+        (builtins.wasm {path = ./out/config.wasm;})
       ];
     });
   };
