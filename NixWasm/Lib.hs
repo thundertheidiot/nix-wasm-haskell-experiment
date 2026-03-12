@@ -1,5 +1,6 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE UndecidableInstances #-}
 module NixWasm.Lib where
 
 import NixWasm.Foreign
@@ -47,10 +48,6 @@ data NixValue = NixInt (Int64)
               | NixFunction (ValueId)
               | NixRawId (ValueId)
               deriving Show
-
-nixBool :: NixValue -> Bool
-nixBool (NixBool b) = b
-nixBool _ = error "Expected a boolean"
 
 nixList :: ValueId -> IO [ValueId]
 nixList vid = do
@@ -166,14 +163,6 @@ makeNixList :: [NixValue] -> IO ValueId
 makeNixList values =
   mapM fromNixValue values >>= newArray >>= (flip nix_make_list) (fromIntegral $ length values)
 
-getString :: NixValue -> String
-getString (NixString s) = s
-getString _ = error "Expected string"
-
-getList :: NixValue -> [NixValue]
-getList (NixList l) = l
-getList _ = error "Expected list"
-
 (|++) :: ToNix a => ToNix b => [a] -> [b] -> [NixValue]
 a |++ b = map toNix a ++ map toNix b
 
@@ -236,6 +225,16 @@ instance NixGetAttrs NixValue where
   val ***. key =
     fromNixValue val >>= flip getAttr key >>= intoNixValue
 
+instance NixGetAttrs (IO NixValue) where
+  val *. key =
+    val >>= (*.key)
+
+  val **. key =
+    val >>= (**.key)
+
+  val ***. key =
+    val >>= (***.key)
+
 attr :: ToNix a => String -> a -> NixAttr
 attr k v = (k, toNix v)
 
@@ -248,17 +247,32 @@ attrs = NixAttrset . map attr'
 mAttrs :: ToNix a => [(String, a)] -> NixValue
 mAttrs = foldl mergeNix (NixAttrset []) . map (\a -> NixAttrset [a]) . map attr'
 
+ioAttrs :: ToNix a => [IO (String, a)] -> IO NixValue
+ioAttrs = (attrs <$>) . mapM id
+
+ioMAttrs :: ToNix a => [IO (String, a)] -> IO NixValue
+ioMAttrs = (mAttrs <$>) . mapM id
+
 emptyAttrs :: NixValue
 emptyAttrs = NixAttrset []
 
-(|.) :: ToNix a => String -> a -> NixAttr
-key |. value = attr key value 
+class NixCreateAttr a where
+  (|.) :: String -> a -> NixAttr
+
+class NixCreateIOAttr a where
+  (||.) :: String -> a -> IO NixAttr
 
 infixr 9 |.
+infixr 9 ||.
 
-(|.++) :: ToNix a => ToNix b => [(String, a)] -> [(String, b)] -> [NixAttr]
-a |.++ b =
-  map (\(k, v) -> (k, toNix v)) a ++ map (\(k, v) -> (k, toNix v)) b
+instance ToNix a => NixCreateAttr a where
+  key |. value = attr key value
+  
+instance ToNix a => NixCreateIOAttr a where
+  key ||. value = pure $ attr key value
+
+instance {-# OVERLAPPING #-} ToNix a => NixCreateIOAttr (IO a) where
+  key ||. value = attr key <$> value
 
 class MergeAttrs a b where
   (//) :: a -> b -> NixValue

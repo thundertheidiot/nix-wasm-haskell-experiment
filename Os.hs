@@ -1,48 +1,44 @@
-import NixWasm.Lib 
+import NixWasm.Lib
+import NixWasm.Stateful
+
 import Control.Monad (join)
+import Control.Monad.State
 
-main = do
-  inputs <- getInputValue
+boot :: Nix ()
+boot = addConfig $ mAttrs [ "fileSystems" |. "/" |. "fsType" |. "tmpfs"
+                          , "boot" |. "loader" |. "grub" |.
+                            (attrs
+                             [ "devices" |. ["nodev"]
+                             , "efiSupport" |. True
+                             , "zfsSupport" |. True
+                             ])
+                          , "boot"  |. "initrd" |. "systemd" |. "enable" |. True
+                          ]
 
-  -- *. gets only the id
-  pkgs <- inputs *. "specialArgs" *. "pkgs"
+mainNix :: Nix NixValue
+mainNix = do
+  initializeNix "x86_64-linux"
 
-  mod <- pure $
-         attrs [ "nixpkgs" |. "hostPlatform" |. "x86_64-linux"
-               ]
+  pkgs <- get >>= \state -> liftIO $ inputs state *. "specialArgs" *. "pkgs"
 
-  evalModules <- inputs *. "evalModules"
+  -- print example
+  -- get >>= \state -> liftIO $ (state *. "networking" ***. "hostName") >>= nixWarn . show
 
-  modules <- evalModules $$ [mod]
-  config <- modules **. "config"
+  addConfig $ attrs [ "networking" |. "hostName" |. "haskell"
+                    , "time" |. "timeZone" |. "Europe/Helsinki"
+                    , "users" |. "users" |. "user" |. attrs
+                      [ "extraGroups" |. ["wheel", "networkmanager"]
+                      , "isNormalUser" |. True ]
+                    , "services" |. "openssh" |. "enable" |. True
+                    ]
 
-  _ <- nixWarn . show =<< modules **. "config"
+  addConfig =<< liftIO
+    (ioAttrs [ "environment" ||. "systemPackages" ||. mapM (pkgs *.) ["vim"]
+             ]) 
 
-  systemPackages <- mapM (pkgs *.) ["vim", "hello"]
+  boot
 
-  nixReturn $ "config" |. mAttrs 
-    [ "networking" |. "hostName" |. "built_by_haskell"
-     , "time" |. "timeZone" |. "Europe/Helsinki"
-     , "users" |. "users" |. "user" |. attrs
-       [ "extraGroups" |. ["wheel", "networkmanager"]
-       , "isNormalUser" |. False ]
-     -- end precedence
-     , "users" |. "users" |. "user" |. "isNormalUser" |. True
+  return . config =<< get
 
-     , "fileSystems" |. "/" |. "fsType" |. "tmpfs"
-     -- mAttrs merges attribute sets
-     , "boot" |. mAttrs
-       [ "loader" |. "grub" |. "devices" |. ["nodev"]
-       , "loader" |. "grub" |. "efiSupport" |. True
-       , "loader" |. "grub" |. "zfsSupport" |. True -- both remain
-       , "initrd" |. "systemd" |. enable  
-       ]
-     , "system" |. "stateVersion" |. "26.05"
-     
-     -- lists are also merged
-     , "environment" |. "systemPackages" |. systemPackages
-
-     , "services" |. "openssh" |. enable
-     ]
-  where
-    enable = "enable" |. True
+main :: IO ()
+main = runStateT mainNix emptyState >>= nixReturn . fst
