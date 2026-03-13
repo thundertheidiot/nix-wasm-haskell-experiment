@@ -1,44 +1,43 @@
 import NixWasm.Lib
-import NixWasm.Stateful
+import NixWasm.NixOS
 
 import Control.Monad (join)
 import Control.Monad.State
 
-boot :: Nix ()
-boot = addConfig $ mAttrs [ "fileSystems" |. "/" |. "fsType" |. "tmpfs"
-                          , "boot" |. "loader" |. "grub" |.
-                            (attrs
-                             [ "devices" |. ["nodev"]
-                             , "efiSupport" |. True
-                             , "zfsSupport" |. True
-                             ])
-                          , "boot"  |. "initrd" |. "systemd" |. "enable" |. True
-                          ]
+boot :: NixOS ()
+boot = config [ "fileSystems" |. "/" |. "fsType" |. "tmpfs"
+              , "boot" |. "loader" |. "grub" |.
+                (attrs
+                  [ "devices" |. ["nodev"]
+                  , "efiSupport" |. True
+                  , "zfsSupport" |. True
+                  ])
+              , "boot"  |. "initrd" |. "systemd" |. "enable" |. True
+              ]
 
-mainNix :: Nix NixValue
+mainNix :: NixOS NixValue
 mainNix = do
-  initializeNix "x86_64-linux"
-
-  pkgs <- get >>= \state -> liftIO $ inputs state *. "specialArgs" *. "pkgs"
+  initializeNixOS
 
   -- print example
   -- get >>= \state -> liftIO $ (state *. "networking" ***. "hostName") >>= nixWarn . show
 
-  addConfig $ attrs [ "networking" |. "hostName" |. "haskell"
-                    , "time" |. "timeZone" |. "Europe/Helsinki"
-                    , "users" |. "users" |. "user" |. attrs
-                      [ "extraGroups" |. ["wheel", "networkmanager"]
-                      , "isNormalUser" |. True ]
-                    , "services" |. "openssh" |. "enable" |. True
-                    ]
+  pkgs <- getPkgs
 
-  addConfig =<< liftIO
-    (ioAttrs [ "environment" ||. "systemPackages" ||. mapM (pkgs *.) ["vim"]
-             ]) 
+  config [ "networking" |. "hostName" |. "haskell"
+         , "time" |. "timeZone" |. "Europe/Helsinki"
+         , "users" |. "users" |. "user" |. attrs
+           [ "extraGroups" |. ["wheel", "networkmanager"]
+           , "isNormalUser" |. True ]
+         , "services" |. "openssh" |. "enable" |. True
+         ]
+
+  configIO [ "environment" ||. "systemPackages" ||. mapM (pkgs *.) ["vim"]
+           ]
 
   boot
 
-  return . config =<< get
+  return . haskellConfig =<< get
 
 main :: IO ()
 main = runStateT mainNix emptyState >>= nixReturn . fst

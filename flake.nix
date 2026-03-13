@@ -39,25 +39,11 @@
       };
     });
 
-    nixosConfigurations.test = nixpkgs.lib.nixosSystem (let
+    nixosConfigurations.test = import ./NixWasm/nixos.nix {
+      inherit (nixpkgs.lib) nixosSystem;
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
-    in {
-      specialArgs = {inherit pkgs;};
-      modules = [
-        nixpkgs.nixosModules.readOnlyPkgs
-        ({...}: {
-          config.nixpkgs.pkgs = pkgs;
-        })
-        (set:
-          builtins.wasm {path = ./out/config.wasm;} (set
-            // {
-              evalModules = extra:
-                nixpkgs.lib.evalModules {
-                  class = "nixos";
-                  modules = import "${set.specialArgs.modulesPath}/../../nixos/modules/module-list.nix" ++ extra;
-                };
-            }))
-      ];
-    });
+      configurationName = "test";
+      wasm = ./out/config.wasm;
+    };
   };
 }
